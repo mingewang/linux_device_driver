@@ -1,3 +1,5 @@
+# based on
+# http://www.freesoftwaremagazine.com/articles/drivers_linux
 #include <linux/module.h>
 #include <linux/kernel.h> /* printk() */
 #include <linux/slab.h> /* kmalloc() */
