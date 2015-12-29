@@ -1,5 +1,6 @@
-# based on
-# http://www.freesoftwaremagazine.com/articles/drivers_linux
+// based on
+// http://www.freesoftwaremagazine.com/articles/drivers_linux
+// https://coherentmusings.wordpress.com/2012/12/22/device-node-creation-without-using-mknod/
 #include <linux/module.h>
 #include <linux/kernel.h> /* printk() */
 #include <linux/slab.h> /* kmalloc() */
@@ -8,6 +9,8 @@
 #include <linux/types.h> /* size_t */
 #include <linux/fcntl.h> /* O_ACCMODE */
 #include <linux/uaccess.h> /* copy_from/to_user */
+#include <linux/device.h>  // for device_
+#include <linux/cdev.h>  // for cdev
 
 /* Declaration of memory.c functions */
 static int memory_open(struct inode *inode, struct file *filp);
@@ -29,8 +32,16 @@ static struct file_operations memory_fops = {
 
 /* Global variables of the driver */
 /* Major number */
-// # please: mknod /dev/memory c 60 0
-static int memory_major = 60;
+// # please: mknod /dev/memory c 60 0; chmod 666 /dev/memory
+// static int memory_major = 60;
+
+// or we can dynamically create /dev/memory
+static dev_t first;         // Global variable for the first device number
+static struct cdev c_dev;     // Global variable for the character device structure
+static struct class *cl;     // Global variable for the device class
+static int init_result;
+
+// buffer size will be 10 bytes 
 static int memory_buffer_size = 10;
 /* Buffer to store data */
 static char *memory_buffer;
@@ -42,12 +53,63 @@ static int memory_init(void) /* Constructor */
   int result;
 
   /* Registering device */
+  /* 
   result = register_chrdev(memory_major, "memory", &memory_fops);
   if (result < 0) {
     printk(
       "<1>memory: cannot obtain major number %d\n", memory_major);
     return result;
   }
+  */
+
+    // automatically create /dev/memory 
+    // get a major number and range of ninor numbers
+    init_result = alloc_chrdev_region( &first, 0, 1, "memory" );
+ 
+    if( 0 > init_result )
+    {
+        printk( KERN_ALERT "Device Registration failed\n" );
+        return -1;
+    }
+    else
+    {
+        printk( KERN_ALERT "Major number is: %d\n",init_result );
+    //    return 0;
+    }
+
+    // create device class 
+    if ( (cl = class_create( THIS_MODULE, "chardev" ) ) == NULL )
+    {
+        printk( KERN_ALERT "Class creation failed\n" );
+        unregister_chrdev_region( first, 1 );
+        return -1;
+    }
+
+    // create device , udev will create device node /dev/memory
+    // how can we set the correct permission on /dev/memory? 
+    // /etc/udev/udev.conf : default_mode = "0666"
+    // or udev rule? http://www.reactivated.net/writing_udev_rules.html
+    if( device_create( cl, NULL, first, NULL, "memory" ) == NULL )
+    {
+        printk( KERN_ALERT "Device creation failed\n" );
+        class_destroy(cl);
+        unregister_chrdev_region( first, 1 );
+        return -1;
+    }
+
+    // create device 
+    cdev_init( &c_dev, &memory_fops );
+
+    // add device to the system 
+    if( cdev_add( &c_dev, first, 1 ) == -1)
+    {
+        printk( KERN_ALERT "Device addition failed\n" );
+        device_destroy( cl, first );
+        class_destroy( cl );
+        unregister_chrdev_region( first, 1 );
+        return -1;
+    }
+
 
   /* Allocating memory for the buffer */
   memory_buffer = kmalloc(memory_buffer_size, GFP_KERNEL); 
@@ -68,7 +130,12 @@ static int memory_init(void) /* Constructor */
 static void memory_exit(void) /* Destructor */
 {
   /* Freeing the major number */
-  unregister_chrdev(memory_major, "memory");
+  // unregister_chrdev(memory_major, "memory");
+
+    cdev_del( &c_dev );
+    device_destroy( cl, first );
+    class_destroy( cl );
+    unregister_chrdev_region( first, 1 );
 
   /* Freeing buffer memory */
   if (memory_buffer) {
